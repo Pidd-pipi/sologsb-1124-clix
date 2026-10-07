@@ -63,6 +63,23 @@ function openCover(cover: Cover): void {
   if (typeof cover.id === 'number') void router.push(`/covers/${cover.id}`)
 }
 
+function isPending(cover: Cover): boolean {
+  return coverStore.reconcileOf(cover).status !== 'matched'
+}
+
+function pendingText(cover: Cover): string {
+  switch (coverStore.reconcileOf(cover).status) {
+    case 'stale':
+      return '结论失效'
+    case 'missing':
+      return '缺明细'
+    case 'mismatch':
+      return '对不上'
+    default:
+      return '待核对'
+  }
+}
+
 function openRoute(route: PostalRoute): void {
   if (typeof route.id === 'number') void router.push(`/routes/${route.id}`)
 }
@@ -172,6 +189,8 @@ function resetAll(): void {
           :cover="cover"
           :stamp-count="coverStore.frankingCount(cover)"
           :pm-count="coverStore.cancelCount(cover)"
+          :pending="isPending(cover)"
+          :pending-text="pendingText(cover)"
           @select="openCover"
         />
       </div>

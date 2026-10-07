@@ -95,6 +95,9 @@ const fallbackTimeline = computed<TimelineNode[]>(() => {
       frontImage: '',
       backImage: '',
       note: '',
+      frankingBasis: null,
+      frankingSig: '',
+      entriesSig: '',
       createdAt: '',
       updatedAt: ''
     },

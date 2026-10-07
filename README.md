@@ -37,9 +37,11 @@ docker compose down
 | 模型 | 文件 | 说明 |
 | --- | --- | --- |
 | Postmark 邮戳 | `frontend/src/types/postmark.ts` | 编目号、戳型、局所、省份、使用年代、戳面日期、墨色、戳径、戳面文字、中英双文字、稀见度、戳样图、备注 |
-| Cover 实寄封 | `frontend/src/types/cover.ts` | 封号、寄出/收件地、寄出/到达日期、贴票构成、关联邮戳、邮路、中转地、给据、品相、来源、购入价、藏册页位 |
+| Cover 实寄封 | `frontend/src/types/cover.ts` | 封号、寄出/收件地、寄出/到达日期、贴票构成、贴票核对结论（以哪侧为准 + 双侧签名）、关联邮戳、邮路、中转地、给据、品相、来源、购入价、藏册页位 |
 | PostalRoute 邮路 | `frontend/src/types/route.ts` | 邮路号、名称、时期、运输方式、节点数组（局所/到达日期/中转戳）、全程天数、班期、备注 |
-| StamplessEntry 票戳组合 | `frontend/src/types/stampentry.ts` | 所属封、邮票名称、面值、发行年份、齿度、变体、封上位置 |
+| StamplessEntry 票戳组合 | `frontend/src/types/stampentry.ts` | 所属封、邮票名称、面值、发行年份、齿度、变体、封上位置、待填行标记 |
+
+贴票对账核心在 `frontend/src/utils/frankingReconcile.ts`：以票戳组合明细（一枚一行）回算贴票构成，按「票名 + 面值」与登记表逐行比对枚数；任一侧改动后双侧签名对不上，已确认结论自动失效重算。
 
 另有 `frontend/src/types/asset.ts`：戳样与封的正反面原图在 IndexedDB 中**单独建表**（`assets`）。
 
@@ -49,8 +51,8 @@ docker compose down
 | --- | --- | --- |
 | `/` | 重定向到 `/postmarks` | — |
 | `/postmarks` | 邮戳目录（按戳型、局所、年代区间筛选，图片墙 ↔ 列表切换） | Postmark |
-| `/covers` | 实寄封目录（按收寄地、年代、品相、是否给据筛选，行内显示贴票枚数与关联邮戳数） | Cover |
-| `/covers/:id` | 实寄封详情（正反面图、票戳组合表、寄递事实时间轴） | Cover、StamplessEntry、PostalRoute |
+| `/covers` | 实寄封目录（按收寄地、年代、品相、是否给据筛选，行内贴票枚数统一取明细回算结果，可只看「待核对」封） | Cover |
+| `/covers/:id` | 实寄封详情（正反面图、贴票核对面板、票戳组合表与待填行补录、寄递事实时间轴） | Cover、StamplessEntry、PostalRoute |
 | `/routes/:id` | 邮路编辑器（节点拖拽排序、增删中转地、按节点日期自动算全程天数） | PostalRoute |
 | `/search` | 综合检索（跨三类按关键词与年代分组检索） | Postmark、Cover、PostalRoute |
 
@@ -99,6 +101,6 @@ sologsb-1124/
 
 ## 八、数据存储说明
 
-- **编目数据**：IndexedDB（Dexie，库名 `gbpostmark`）。表结构含版本号，`version(2)` 会把戳样与封图迁移到独立的 `assets` 表并补齐历史记录缺省字段；首次运行写入样例数据，便于直接查看各页面效果。
+- **编目数据**：IndexedDB（Dexie，库名 `gbpostmark`）。表结构含版本号：`version(2)` 把戳样与封图迁移到独立的 `assets` 表并补齐历史记录缺省字段；`version(3)` 接通贴票构成与票戳组合的同一份账——旧明细补 `draft` 标记，缺明细的封按贴票构成补待填行，对不上的封不写结论、自动列入「待核对」。首次运行写入样例数据，便于直接查看各页面效果。
 - **表单草稿**：localStorage，键名前缀 `gbpostmark:draft:`（邮戳、实寄封、邮路各一份），刷新或误关页面后可恢复，可一键清除。
 - **无后端**：不请求任何外部接口，容器无状态，不使用数据库服务与命名卷；清除浏览器站点数据即等于清空数据。

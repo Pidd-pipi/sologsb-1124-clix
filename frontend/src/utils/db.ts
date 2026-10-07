@@ -8,10 +8,11 @@ import type { Cover } from '@/types/cover'
 import type { PostalRoute } from '@/types/route'
 import type { StamplessEntry } from '@/types/stampentry'
 import type { AssetOwnerType, AssetSide, CatalogAsset } from '@/types/asset'
+import { buildDraftEntries } from '@/utils/frankingReconcile'
 
 export const DB_NAME = 'gbpostmark'
 /** 当前数据结构版本号，升级迁移写在下面对应的 version() 中 */
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 
 export class GbPostmarkDatabase extends Dexie {
   postmarks!: Table<Postmark, number>
@@ -34,7 +35,7 @@ export class GbPostmarkDatabase extends Dexie {
     })
 
     // v2：原图拆到 assets 表单独存放，并补齐历史记录缺省字段（升级迁移）
-    this.version(DB_VERSION)
+    this.version(2)
       .stores({
         postmarks:
           '++id, pmNo, type, office, province, yearFrom, yearTo, scarceLevel, inkColor, bilingual',
@@ -71,6 +72,50 @@ export class GbPostmarkDatabase extends Dexie {
           .modify((rt: Partial<PostalRoute>) => {
             if (!Array.isArray(rt.nodes)) rt.nodes = []
             if (typeof rt.totalDays !== 'number') rt.totalDays = 0
+          })
+      })
+
+    // v3：贴票构成与票戳组合接成同一份账。
+    // - 补齐票戳明细的 draft 标记与封上的核对结论字段；
+    // - 缺明细的封按贴票构成补 draft 待填行（枚数对齐，票名/面值取自构成）；
+    // - 对不上的封不写结论，自然列入「待核对」；已一致的旧封保持未确认，由收藏者一键确认。
+    this.version(DB_VERSION)
+      .stores({
+        postmarks:
+          '++id, pmNo, type, office, province, yearFrom, yearTo, scarceLevel, inkColor, bilingual',
+        covers:
+          '++id, coverNo, sentFrom, sentTo, postDate, conditionGrade, registered, routeId, acquireFrom',
+        routes: '++id, routeNo, name, era, transport, totalDays',
+        stampEntries: '++id, coverId, stampName, variety, issueYear, draft',
+        assets: '++id, ownerType, ownerId, side, [ownerType+ownerId]'
+      })
+      .upgrade(async (tx) => {
+        const migratedAt = new Date().toISOString()
+        await tx
+          .table('stampEntries')
+          .toCollection()
+          .modify((entry: Partial<StamplessEntry>) => {
+            if (typeof entry.draft !== 'boolean') entry.draft = false
+          })
+        const entriesTable = tx.table<StamplessEntry, number>('stampEntries')
+        // 缺明细的封：先按贴票构成补待填行（bulkAdd 为显式写操作）
+        const covers = await tx.table<Cover, number>('covers').toArray()
+        for (const cv of covers) {
+          const own = await entriesTable.where('coverId').equals(cv.id as number).toArray()
+          if (own.length === 0 && Array.isArray(cv.franking) && cv.franking.length > 0) {
+            const drafts = buildDraftEntries(cv.id as number, cv.franking, [], migratedAt)
+            await entriesTable.bulkAdd(drafts)
+          }
+        }
+        // 封上的核对结论字段必须在 modify 回调里补，否则不会落盘
+        await tx
+          .table('covers')
+          .toCollection()
+          .modify((cv: Partial<Cover>) => {
+            if (!Array.isArray(cv.franking)) cv.franking = []
+            if (typeof cv.frankingBasis !== 'string') cv.frankingBasis = null
+            if (typeof cv.frankingSig !== 'string') cv.frankingSig = ''
+            if (typeof cv.entriesSig !== 'string') cv.entriesSig = ''
           })
       })
   }
@@ -357,8 +402,15 @@ function seedRoutes(): PostalRoute[] {
 }
 
 function seedCovers(): Cover[] {
+  // 样例数据均未确认核对结论：对不上的封进入待核对，由收藏者选边写入。
+  const base = (cover: Omit<Cover, 'frankingBasis' | 'frankingSig' | 'entriesSig'>): Cover => ({
+    ...cover,
+    frankingBasis: null,
+    frankingSig: '',
+    entriesSig: ''
+  })
   return [
-    {
+    base({
       id: 1,
       coverNo: 'CV-0001',
       sentFrom: '上海',
@@ -382,8 +434,8 @@ function seedCovers(): Cover[] {
       note: '挂号实寄，封背有三处中转戳，戳面完整。',
       createdAt: SEED_TS,
       updatedAt: SEED_TS
-    },
-    {
+    }),
+    base({
       id: 2,
       coverNo: 'CV-0002',
       sentFrom: '天津',
@@ -404,8 +456,8 @@ function seedCovers(): Cover[] {
       note: '平信，封舌有裂口，票戳关系清晰。',
       createdAt: SEED_TS,
       updatedAt: SEED_TS
-    },
-    {
+    }),
+    base({
       id: 3,
       coverNo: 'CV-0003',
       sentFrom: '广州',
@@ -429,8 +481,8 @@ function seedCovers(): Cover[] {
       note: '封体有水渍，邮路节点仍可辨读。',
       createdAt: SEED_TS,
       updatedAt: SEED_TS
-    },
-    {
+    }),
+    base({
       id: 4,
       coverNo: 'CV-0004',
       sentFrom: '南京',
@@ -451,7 +503,7 @@ function seedCovers(): Cover[] {
       note: '到达日期待考，暂按邮路班期推定。',
       createdAt: SEED_TS,
       updatedAt: SEED_TS
-    }
+    })
   ]
 }
 
@@ -466,6 +518,7 @@ function seedStampEntries(): StamplessEntry[] {
       perforation: 'P14',
       variety: '正品',
       positionOnCover: '右上',
+      draft: false,
       createdAt: SEED_TS
     },
     {
@@ -477,6 +530,7 @@ function seedStampEntries(): StamplessEntry[] {
       perforation: 'P14',
       variety: '移位',
       positionOnCover: '中部',
+      draft: false,
       createdAt: SEED_TS
     },
     {
@@ -488,6 +542,7 @@ function seedStampEntries(): StamplessEntry[] {
       perforation: 'P14',
       variety: '正品',
       positionOnCover: '右上',
+      draft: false,
       createdAt: SEED_TS
     },
     {
@@ -499,6 +554,7 @@ function seedStampEntries(): StamplessEntry[] {
       perforation: 'P12.5',
       variety: '组外品',
       positionOnCover: '左上',
+      draft: false,
       createdAt: SEED_TS
     },
     {
@@ -510,6 +566,7 @@ function seedStampEntries(): StamplessEntry[] {
       perforation: 'P12.5',
       variety: '漏齿',
       positionOnCover: '左下',
+      draft: false,
       createdAt: SEED_TS
     },
     {
@@ -521,6 +578,7 @@ function seedStampEntries(): StamplessEntry[] {
       perforation: 'P14',
       variety: '正品',
       positionOnCover: '右上',
+      draft: false,
       createdAt: SEED_TS
     }
   ]

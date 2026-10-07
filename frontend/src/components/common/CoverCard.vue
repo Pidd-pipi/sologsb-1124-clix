@@ -10,9 +10,13 @@ const props = withDefaults(
     stampCount?: number
     /** 关联邮戳数，行内展示 */
     pmCount?: number
+    /** 贴票待核对（对不上 / 缺明细 / 结论失效） */
+    pending?: boolean
+    /** 待核对细分文案，如 缺明细 / 对不上 / 结论失效 */
+    pendingText?: string
     active?: boolean
   }>(),
-  { stampCount: 0, pmCount: 0, active: false }
+  { stampCount: 0, pmCount: 0, pending: false, pendingText: '待核对', active: false }
 )
 
 const emit = defineEmits<{ select: [cover: Cover] }>()
@@ -37,6 +41,7 @@ function routeText(cover: Cover): string {
         <span class="cover-card__no">{{ cover.coverNo }}</span>
         <span class="cover-card__tags">
           <el-tag v-if="cover.registered" size="small" type="danger" effect="plain">给据</el-tag>
+          <el-tag v-if="pending" size="small" type="warning" effect="dark">{{ pendingText }}</el-tag>
           <ScarceTag :level="cover.conditionGrade" kind="grade" />
         </span>
       </header>

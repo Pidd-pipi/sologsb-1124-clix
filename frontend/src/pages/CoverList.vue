@@ -25,6 +25,7 @@ const { filters, filtered, activeCount, reset } = useCatalogFilter<Cover>('cover
 
 const viewMode = ref<'card' | 'table'>('card')
 const dialogVisible = ref(false)
+const onlyPending = ref(false)
 const form = reactive<Cover>(createEmptyCover())
 const frontImage = ref<ImagePayload | null>(null)
 const backImage = ref<ImagePayload | null>(null)
@@ -35,6 +36,31 @@ onMounted(async () => {
   if (!postmarkStore.loaded) await postmarkStore.load()
   if (!routeStore.loaded) await routeStore.load()
 })
+
+const pendingIds = computed(
+  () => new Set(coverStore.list.filter((c) => coverStore.reconcileOf(c).status !== 'matched').map((c) => c.id))
+)
+
+const displayed = computed<Cover[]>(() =>
+  onlyPending.value ? filtered.value.filter((c) => pendingIds.value.has(c.id)) : filtered.value
+)
+
+function isPending(cover: Cover): boolean {
+  return pendingIds.value.has(cover.id)
+}
+
+function reconcileStatusText(cover: Cover): string {
+  switch (coverStore.reconcileOf(cover).status) {
+    case 'stale':
+      return '结论失效'
+    case 'missing':
+      return '缺明细'
+    case 'mismatch':
+      return '对不上'
+    default:
+      return '已核对'
+  }
+}
 
 watch(
   form,
@@ -131,23 +157,28 @@ async function submit(): Promise<void> {
     return
   }
   const coverNo = form.coverNo || coverStore.nextCoverNo()
-  const id = await coverStore.create(
-    {
-      ...form,
-      coverNo,
-      franking: form.franking.map((f) => ({ ...f })),
-      cancelPmIds: [...form.cancelPmIds],
-      viaPoints: [...form.viaPoints],
-      routeId: typeof form.routeId === 'number' ? form.routeId : null,
-      price: toNumber(form.price)
-    },
-    { front: frontImage.value ?? undefined, back: backImage.value ?? undefined }
-  )
-  clearDraft('cover')
-  draftHint.value = ''
-  dialogVisible.value = false
-  ElMessage.success(`已登记实寄封 ${coverNo}`)
-  await router.push(`/covers/${id}`)
+  try {
+    const id = await coverStore.create(
+      {
+        ...form,
+        coverNo,
+        franking: form.franking.map((f) => ({ ...f })),
+        cancelPmIds: [...form.cancelPmIds],
+        viaPoints: [...form.viaPoints],
+        routeId: typeof form.routeId === 'number' ? form.routeId : null,
+        price: toNumber(form.price)
+      },
+      { front: frontImage.value ?? undefined, back: backImage.value ?? undefined }
+    )
+    clearDraft('cover')
+    draftHint.value = ''
+    dialogVisible.value = false
+    ElMessage.success(`已登记实寄封 ${coverNo}`)
+    await router.push(`/covers/${id}`)
+  } catch (err) {
+    // store 已删除半截记录，界面仍停在弹窗，恢复到改动前可修改后重试
+    ElMessage.error(`保存失败，已恢复到改动前：${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 function openDetail(cover: Cover): void {
@@ -172,10 +203,13 @@ function routeLabel(routeId: number | null): string {
       <div>
         <h1 class="gb-page__title">实寄封目录</h1>
         <p class="gb-page__subtitle">
-          共 {{ coverStore.total }} 封，其中给据邮件 {{ coverStore.registeredCount }} 封；按收寄地、年代、品相、是否给据筛选。
+          共 {{ coverStore.total }} 封，其中给据邮件 {{ coverStore.registeredCount }} 封、贴票待核对
+          {{ coverStore.pendingCount }} 封；目录贴票合计 {{ coverStore.totalStampCount }}
+          枚（按票戳组合明细回算的同一份账）。
         </p>
       </div>
       <div class="cover-page__actions">
+        <el-checkbox v-model="onlyPending">只看待核对</el-checkbox>
         <el-radio-group v-model="viewMode" size="small">
           <el-radio-button value="card">卡片</el-radio-button>
           <el-radio-button value="table">表格</el-radio-button>
@@ -222,20 +256,22 @@ function routeLabel(routeId: number | null): string {
       </el-form>
     </section>
 
-    <p v-if="!filtered.length" class="gb-empty">没有符合当前条件的实寄封，试试清空收寄地或放宽年代区间。</p>
+    <p v-if="!displayed.length" class="gb-empty">没有符合当前条件的实寄封，试试清空收寄地或放宽年代区间。</p>
 
     <div v-else-if="viewMode === 'card'" class="gb-grid gb-grid--wide">
       <CoverCard
-        v-for="cover in filtered"
+        v-for="cover in displayed"
         :key="cover.id"
         :cover="cover"
         :stamp-count="coverStore.frankingCount(cover)"
         :pm-count="coverStore.cancelCount(cover)"
+        :pending="isPending(cover)"
+        :pending-text="reconcileStatusText(cover)"
         @select="openDetail"
       />
     </div>
 
-    <el-table v-else :data="filtered" border stripe @row-click="openDetail">
+    <el-table v-else :data="displayed" border stripe @row-click="openDetail">
       <el-table-column prop="coverNo" label="封号" width="110" />
       <el-table-column label="收寄地" min-width="170">
         <template #default="{ row }">{{ row.sentFrom }} → {{ row.sentTo }}</template>
@@ -245,6 +281,19 @@ function routeLabel(routeId: number | null): string {
       <el-table-column label="贴票枚数" width="110" align="center">
         <template #default="{ row }">
           <el-tag size="small" effect="plain">{{ coverStore.frankingCount(row) }} 枚</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="核对状态" width="100" align="center">
+        <template #default="{ row }">
+          <el-tag
+            v-if="isPending(row)"
+            size="small"
+            :type="coverStore.reconcileOf(row).status === 'stale' ? 'danger' : 'warning'"
+            effect="plain"
+          >
+            {{ reconcileStatusText(row) }}
+          </el-tag>
+          <el-tag v-else size="small" type="success" effect="plain">已核对</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="关联邮戳" width="120" align="center">

@@ -10,6 +10,9 @@ export interface FrankingItem {
   count: number
 }
 
+/** 贴票核对结论：以票戳组合明细回算为准，或以登记表贴票构成为准。 */
+export type FrankingBasis = 'entries' | 'franking'
+
 export interface Cover {
   id?: number
   /** 封号，如 CV-0001 */
@@ -41,6 +44,12 @@ export interface Cover {
   /** 封面背面图（缩略 dataURL；原图存 assets 表） */
   backImage: string
   note: string
+  /** 贴票核对结论以哪侧为准；null = 尚未核对确认 */
+  frankingBasis: FrankingBasis | null
+  /** 确认时登记表贴票构成的签名；与当前不一致即结论失效 */
+  frankingSig: string
+  /** 确认时票戳组合明细（含待填行）的签名；与当前不一致即结论失效 */
+  entriesSig: string
   createdAt: string
   updatedAt: string
 }
@@ -67,6 +76,9 @@ export function createEmptyCover(): Cover {
     frontImage: '',
     backImage: '',
     note: '',
+    frankingBasis: null,
+    frankingSig: '',
+    entriesSig: '',
     createdAt: '',
     updatedAt: ''
   }
