@@ -172,6 +172,7 @@ function resetAll(): void {
           :cover="cover"
           :stamp-count="coverStore.frankingCount(cover)"
           :pm-count="coverStore.cancelCount(cover)"
+          :pending="coverStore.isPending(cover)"
           @select="openCover"
         />
       </div>

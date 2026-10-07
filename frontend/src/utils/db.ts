@@ -8,10 +8,12 @@ import type { Cover } from '@/types/cover'
 import type { PostalRoute } from '@/types/route'
 import type { StamplessEntry } from '@/types/stampentry'
 import type { AssetOwnerType, AssetSide, CatalogAsset } from '@/types/asset'
+import { buildToFillEntries, evaluateCover } from '@/utils/frankingReconcile'
+import { nowIso } from '@/utils/id'
 
 export const DB_NAME = 'gbpostmark'
 /** 当前数据结构版本号，升级迁移写在下面对应的 version() 中 */
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 
 export class GbPostmarkDatabase extends Dexie {
   postmarks!: Table<Postmark, number>
@@ -72,6 +74,68 @@ export class GbPostmarkDatabase extends Dexie {
             if (!Array.isArray(rt.nodes)) rt.nodes = []
             if (typeof rt.totalDays !== 'number') rt.totalDays = 0
           })
+      })
+
+    // v3：登记表贴票构成与详情页票戳组合合成同一份账（对账）
+    this.version(DB_VERSION)
+      .stores({
+        postmarks:
+          '++id, pmNo, type, office, province, yearFrom, yearTo, scarceLevel, inkColor, bilingual',
+        covers:
+          '++id, coverNo, sentFrom, sentTo, postDate, conditionGrade, registered, routeId, acquireFrom, reconcileStatus',
+        routes: '++id, routeNo, name, era, transport, totalDays',
+        stampEntries: '++id, coverId, stampName, variety, issueYear, toFill',
+        assets: '++id, ownerType, ownerId, side, [ownerType+ownerId]'
+      })
+      .upgrade(async (tx) => {
+        const coverTable = tx.table<Cover, number>('covers')
+        const entryTable = tx.table<StamplessEntry, number>('stampEntries')
+
+        await entryTable.toCollection().modify((en: Partial<StamplessEntry>) => {
+          if (typeof en.toFill !== 'boolean') en.toFill = false
+        })
+
+        // 先读全量数据用于对账：明细按封分组
+        const covers = await coverTable.toArray()
+        const entries = await entryTable.toArray()
+        const entriesByCover = new Map<number, StamplessEntry[]>()
+        for (const en of entries) {
+          const list = entriesByCover.get(en.coverId) ?? []
+          list.push(en)
+          entriesByCover.set(en.coverId, list)
+        }
+
+        const coverUpdates: Cover[] = []
+        const toAdd: StamplessEntry[] = []
+        const stamp = nowIso()
+
+        for (const cv of covers) {
+          if (typeof cv.id !== 'number') continue
+          if (!Array.isArray(cv.franking)) cv.franking = []
+          const own = entriesByCover.get(cv.id) ?? []
+          const state = evaluateCover(cv.franking, own)
+          const next: Cover = {
+            ...cv,
+            reconcileSnapshot: []
+          }
+          if (state.canConfirm) {
+            // 对得上：保留结论，直接确认入账，以明细侧为基准
+            next.reconcileStatus = 'confirmed'
+            next.reconcileSide = 'entries'
+            next.reconcileSnapshot = state.derived
+          } else {
+            // 对不上（票名/枚数不符或缺待填行）：列入待核对
+            next.reconcileStatus = 'pending'
+            next.reconcileSide = null
+            // 缺明细：按贴票构成补待填行
+            if (own.length === 0 && cv.franking.length > 0) {
+              toAdd.push(...buildToFillEntries(cv.id, cv.franking, stamp))
+            }
+          }
+          coverUpdates.push(next)
+        }
+        if (coverUpdates.length) await coverTable.bulkPut(coverUpdates)
+        if (toAdd.length) await entryTable.bulkAdd(toAdd)
       })
   }
 }
@@ -379,7 +443,10 @@ function seedCovers(): Cover[] {
       storageAlbum: '甲册 3 页',
       frontImage: coverThumbDataUrl('CV-0001', '上海', '南京', '1910-06-18'),
       backImage: '',
-      note: '挂号实寄，封背有三处中转戳，戳面完整。',
+      note: '挂号实寄，封背有三处中转戳，戳面完整。登记表记 3 分 2 枚 + 1 分 1 枚，明细只录 2 条，待核对。',
+      reconcileStatus: 'pending',
+      reconcileSide: null,
+      reconcileSnapshot: [],
       createdAt: SEED_TS,
       updatedAt: SEED_TS
     },
@@ -401,7 +468,10 @@ function seedCovers(): Cover[] {
       storageAlbum: '乙册 1 页',
       frontImage: coverThumbDataUrl('CV-0002', '天津', '上海', '1921-03-05'),
       backImage: '',
-      note: '平信，封舌有裂口，票戳关系清晰。',
+      note: '平信，封舌有裂口，票戳关系清晰。登记表记 4 分 2 枚，明细只录 1 条，待核对。',
+      reconcileStatus: 'pending',
+      reconcileSide: null,
+      reconcileSnapshot: [],
       createdAt: SEED_TS,
       updatedAt: SEED_TS
     },
@@ -426,7 +496,10 @@ function seedCovers(): Cover[] {
       storageAlbum: '丙册 2 页',
       frontImage: coverThumbDataUrl('CV-0003', '广州', '武汉', '1936-09-12'),
       backImage: '',
-      note: '封体有水渍，邮路节点仍可辨读。',
+      note: '封体有水渍，邮路节点仍可辨读。登记表记 2 分 2 枚，明细只录 1 条，待核对。',
+      reconcileStatus: 'pending',
+      reconcileSide: null,
+      reconcileSnapshot: [],
       createdAt: SEED_TS,
       updatedAt: SEED_TS
     },
@@ -448,7 +521,38 @@ function seedCovers(): Cover[] {
       storageAlbum: '丁册 4 页',
       frontImage: coverThumbDataUrl('CV-0004', '南京', '杭州', '1958-04-02'),
       backImage: '',
-      note: '到达日期待考，暂按邮路班期推定。',
+      note: '到达日期待考，暂按邮路班期推定。贴票构成与明细一致，已确认入账。',
+      reconcileStatus: 'confirmed',
+      reconcileSide: 'entries',
+      reconcileSnapshot: [{ stampName: '普八邮票', denomination: 8, count: 1 }],
+      createdAt: SEED_TS,
+      updatedAt: SEED_TS
+    },
+    {
+      id: 5,
+      coverNo: 'CV-0005',
+      sentFrom: '北京',
+      sentTo: '天津',
+      postDate: '1948-02-14',
+      arriveDate: '1948-02-15',
+      franking: [
+        { stampName: '孙中山像邮票', denomination: 3000, count: 1 },
+        { stampName: '孙中山像邮票', denomination: 1000, count: 2 }
+      ],
+      cancelPmIds: [],
+      routeId: null,
+      viaPoints: [],
+      registered: false,
+      conditionGrade: '中品',
+      acquireFrom: '旧书店代购',
+      price: 80,
+      storageAlbum: '戊册 1 页',
+      frontImage: coverThumbDataUrl('CV-0005', '北京', '天津', '1948-02-14'),
+      backImage: '',
+      note: '旧数据：登记表有贴票构成、详情页尚未录票戳明细，已按构成补出三行待填。',
+      reconcileStatus: 'pending',
+      reconcileSide: null,
+      reconcileSnapshot: [],
       createdAt: SEED_TS,
       updatedAt: SEED_TS
     }
@@ -456,8 +560,9 @@ function seedCovers(): Cover[] {
 }
 
 function seedStampEntries(): StamplessEntry[] {
+  const entry = (e: StamplessEntry): StamplessEntry => ({ ...e, toFill: e.toFill ?? false })
   return [
-    {
+    entry({
       id: 1,
       coverId: 1,
       stampName: '蟠龙邮票',
@@ -466,9 +571,10 @@ function seedStampEntries(): StamplessEntry[] {
       perforation: 'P14',
       variety: '正品',
       positionOnCover: '右上',
+      toFill: false,
       createdAt: SEED_TS
-    },
-    {
+    }),
+    entry({
       id: 2,
       coverId: 1,
       stampName: '蟠龙邮票',
@@ -477,9 +583,10 @@ function seedStampEntries(): StamplessEntry[] {
       perforation: 'P14',
       variety: '移位',
       positionOnCover: '中部',
+      toFill: false,
       createdAt: SEED_TS
-    },
-    {
+    }),
+    entry({
       id: 3,
       coverId: 2,
       stampName: '帆船邮票',
@@ -488,9 +595,10 @@ function seedStampEntries(): StamplessEntry[] {
       perforation: 'P14',
       variety: '正品',
       positionOnCover: '右上',
+      toFill: false,
       createdAt: SEED_TS
-    },
-    {
+    }),
+    entry({
       id: 4,
       coverId: 3,
       stampName: '孙中山像邮票',
@@ -499,9 +607,10 @@ function seedStampEntries(): StamplessEntry[] {
       perforation: 'P12.5',
       variety: '组外品',
       positionOnCover: '左上',
+      toFill: false,
       createdAt: SEED_TS
-    },
-    {
+    }),
+    entry({
       id: 5,
       coverId: 3,
       stampName: '孙中山像邮票',
@@ -510,9 +619,10 @@ function seedStampEntries(): StamplessEntry[] {
       perforation: 'P12.5',
       variety: '漏齿',
       positionOnCover: '左下',
+      toFill: false,
       createdAt: SEED_TS
-    },
-    {
+    }),
+    entry({
       id: 6,
       coverId: 4,
       stampName: '普八邮票',
@@ -521,8 +631,46 @@ function seedStampEntries(): StamplessEntry[] {
       perforation: 'P14',
       variety: '正品',
       positionOnCover: '右上',
+      toFill: false,
       createdAt: SEED_TS
-    }
+    }),
+    // CV-0005：旧数据缺明细，按贴票构成补出的待填行
+    entry({
+      id: 7,
+      coverId: 5,
+      stampName: '孙中山像邮票',
+      denomination: 3000,
+      issueYear: 1947,
+      perforation: '',
+      variety: '正品',
+      positionOnCover: '右上',
+      toFill: true,
+      createdAt: SEED_TS
+    }),
+    entry({
+      id: 8,
+      coverId: 5,
+      stampName: '孙中山像邮票',
+      denomination: 1000,
+      issueYear: 1947,
+      perforation: '',
+      variety: '正品',
+      positionOnCover: '中部',
+      toFill: true,
+      createdAt: SEED_TS
+    }),
+    entry({
+      id: 9,
+      coverId: 5,
+      stampName: '孙中山像邮票',
+      denomination: 1000,
+      issueYear: 1947,
+      perforation: '',
+      variety: '正品',
+      positionOnCover: '右下',
+      toFill: true,
+      createdAt: SEED_TS
+    })
   ]
 }
 

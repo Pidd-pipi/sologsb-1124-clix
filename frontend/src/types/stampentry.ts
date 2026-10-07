@@ -26,6 +26,11 @@ export interface StamplessEntry {
   perforation: string
   variety: VarietyType
   positionOnCover: CoverPosition
+  /**
+   * 待填行：旧数据升级时「缺明细」按贴票构成补出的占位行，
+   * 以及新封按贴票构成预生成、待补录票戳明细的行。补齐明细并保存后转为正式行。
+   */
+  toFill: boolean
   createdAt: string
 }
 
@@ -50,6 +55,7 @@ export function createEmptyStampEntry(coverId: number): StamplessEntry {
     perforation: 'P11',
     variety: '正品',
     positionOnCover: '右上',
+    toFill: false,
     createdAt: ''
   }
 }

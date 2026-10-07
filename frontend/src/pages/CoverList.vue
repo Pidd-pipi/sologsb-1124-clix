@@ -131,22 +131,28 @@ async function submit(): Promise<void> {
     return
   }
   const coverNo = form.coverNo || coverStore.nextCoverNo()
-  const id = await coverStore.create(
-    {
-      ...form,
-      coverNo,
-      franking: form.franking.map((f) => ({ ...f })),
-      cancelPmIds: [...form.cancelPmIds],
-      viaPoints: [...form.viaPoints],
-      routeId: typeof form.routeId === 'number' ? form.routeId : null,
-      price: toNumber(form.price)
-    },
-    { front: frontImage.value ?? undefined, back: backImage.value ?? undefined }
-  )
+  let id: number
+  try {
+    id = await coverStore.create(
+      {
+        ...form,
+        coverNo,
+        franking: form.franking.map((f) => ({ ...f })),
+        cancelPmIds: [...form.cancelPmIds],
+        viaPoints: [...form.viaPoints],
+        routeId: typeof form.routeId === 'number' ? form.routeId : null,
+        price: toNumber(form.price)
+      },
+      { front: frontImage.value ?? undefined, back: backImage.value ?? undefined }
+    )
+  } catch {
+    ElMessage.error('保存失败，已恢复到改动前，请重试')
+    return
+  }
   clearDraft('cover')
   draftHint.value = ''
   dialogVisible.value = false
-  ElMessage.success(`已登记实寄封 ${coverNo}`)
+  ElMessage.success(`已登记实寄封 ${coverNo}，请在详情页补齐票戳明细`)
   await router.push(`/covers/${id}`)
 }
 
@@ -172,7 +178,11 @@ function routeLabel(routeId: number | null): string {
       <div>
         <h1 class="gb-page__title">实寄封目录</h1>
         <p class="gb-page__subtitle">
-          共 {{ coverStore.total }} 封，其中给据邮件 {{ coverStore.registeredCount }} 封；按收寄地、年代、品相、是否给据筛选。
+          共 {{ coverStore.total }} 封，其中给据邮件 {{ coverStore.registeredCount }} 封、
+          <span :class="{ 'cover-page__pending-n': coverStore.pendingCount > 0 }">
+            待核对 {{ coverStore.pendingCount }} 封
+          </span>
+          ；贴票合计按已对齐的同一份账展示。按收寄地、年代、品相、是否给据筛选。
         </p>
       </div>
       <div class="cover-page__actions">
@@ -231,6 +241,7 @@ function routeLabel(routeId: number | null): string {
         :cover="cover"
         :stamp-count="coverStore.frankingCount(cover)"
         :pm-count="coverStore.cancelCount(cover)"
+        :pending="coverStore.isPending(cover)"
         @select="openDetail"
       />
     </div>
@@ -245,6 +256,9 @@ function routeLabel(routeId: number | null): string {
       <el-table-column label="贴票枚数" width="110" align="center">
         <template #default="{ row }">
           <el-tag size="small" effect="plain">{{ coverStore.frankingCount(row) }} 枚</el-tag>
+          <el-tag v-if="coverStore.isPending(row)" size="small" type="warning" effect="plain">
+            待核对
+          </el-tag>
         </template>
       </el-table-column>
       <el-table-column label="关联邮戳" width="120" align="center">
@@ -495,6 +509,10 @@ function routeLabel(routeId: number | null): string {
 .cover-page__draft {
   font-size: 12px;
   color: var(--gb-muted);
+}
+.cover-page__pending-n {
+  color: #b06f16;
+  font-weight: 600;
 }
 .cover-page__pm-list {
   list-style: none;

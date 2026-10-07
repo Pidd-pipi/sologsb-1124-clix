@@ -10,9 +10,11 @@ const props = withDefaults(
     stampCount?: number
     /** 关联邮戳数，行内展示 */
     pmCount?: number
+    /** 贴票构成与票戳明细对不上，待核对 */
+    pending?: boolean
     active?: boolean
   }>(),
-  { stampCount: 0, pmCount: 0, active: false }
+  { stampCount: 0, pmCount: 0, pending: false, active: false }
 )
 
 const emit = defineEmits<{ select: [cover: Cover] }>()
@@ -46,6 +48,7 @@ function routeText(cover: Cover): string {
       </p>
       <p class="cover-card__meta">
         贴票 {{ stampCount }} 枚 · 关联邮戳 {{ pmCount }} 枚
+        <el-tag v-if="pending" size="small" type="warning" effect="plain">待核对</el-tag>
       </p>
       <p class="cover-card__via">中转：{{ joinCn(cover.viaPoints, '直封') }}</p>
     </div>

@@ -10,6 +10,12 @@ export interface FrankingItem {
   count: number
 }
 
+/** 对账基准侧：以详情页票戳组合明细为准，或以登记表贴票构成为准 */
+export type ReconcileSide = 'entries' | 'franking'
+
+/** 对账状态：pending 待核对（含结果未确认），confirmed 已确认入账 */
+export type ReconcileStatus = 'pending' | 'confirmed'
+
 export interface Cover {
   id?: number
   /** 封号，如 CV-0001 */
@@ -41,6 +47,12 @@ export interface Cover {
   /** 封面背面图（缩略 dataURL；原图存 assets 表） */
   backImage: string
   note: string
+  /** pending 待核对（含旧数据升级后对不上 / 缺明细）/ confirmed 已确认入账 */
+  reconcileStatus: ReconcileStatus
+  /** 入账基准侧：确认时以哪边结果写入并同步两侧；待核对时保留上次选择 */
+  reconcileSide: ReconcileSide | null
+  /** 已确认结论的快照（归一后的贴票构成）；任一侧改动后失效重算，结论保留待重新确认 */
+  reconcileSnapshot: FrankingItem[]
   createdAt: string
   updatedAt: string
 }
@@ -67,6 +79,9 @@ export function createEmptyCover(): Cover {
     frontImage: '',
     backImage: '',
     note: '',
+    reconcileStatus: 'pending',
+    reconcileSide: null,
+    reconcileSnapshot: [],
     createdAt: '',
     updatedAt: ''
   }

@@ -32,6 +32,13 @@ docker compose down
 | 本地数据 | IndexedDB（Dexie，含版本号与升级迁移）+ localStorage（表单草稿） |
 | 托管 | nginx:alpine（gzip + SPA 回退） |
 
+### 贴票对账（贴票构成 ↔ 票戳组合明细，同一份账）
+
+- 登记表维护「贴票构成」（票名/面值/枚数），详情页维护「票戳组合明细」（一行一枚）。详情页按明细回算贴票构成并逐行比对：枚数或票名对不上时，在详情页对账表标出差异（登记 N 枚 / 回算 M 枚 / 明细多寡）。
+- 必须**选定以哪边为准才写入**：以明细为准则用回算结果覆盖登记表；以贴票构成为准则只补差（补「待填行」），不删已有明细，明细多出时拒绝写入并提示先处理。
+- **任一侧改动后另一侧的已确认结果立即失效重算**（状态回到待核对，原结论快照保留）；全部写库操作包在 Dexie 事务里，**保存失败整体回滚到改动前**，已确认的封保留结论。
+- 目录页、卡片、检索的贴票枚数与待核对数**按同一归一结果合计**展示。旧数据升级（v3）时把对不上的封列入待核对；缺明细的封按贴票构成补待填行。
+
 ## 三、核心数据模型
 
 | 模型 | 文件 | 说明 |
@@ -58,7 +65,7 @@ docker compose down
 
 - 组件：`frontend/src/components/common/` 下的 `StampCard.vue`、`CoverCard.vue`、`RouteTimeline.vue`、`ScarceTag.vue`
 - hooks：`frontend/src/hooks/useCatalogFilter.ts`（统一过滤与排序）、`frontend/src/hooks/useCoverRoute.ts`（寄递时间轴与在途天数）
-- utils：`frontend/src/utils/db.ts`（Dexie 封装/版本迁移/样例数据）、`frontend/src/utils/dateRange.ts`（年代区间、干支互转、日期先后校验）、`frontend/src/utils/id.ts`（编目号与唯一键）、`frontend/src/utils/draft.ts`（localStorage 草稿）
+- utils：`frontend/src/utils/db.ts`（Dexie 封装/版本迁移/样例数据）、`frontend/src/utils/frankingReconcile.ts`（贴票构成与票戳明细对账：回算、差异、待填行）、`frontend/src/utils/dateRange.ts`（年代区间、干支互转、日期先后校验）、`frontend/src/utils/id.ts`（编目号与唯一键）、`frontend/src/utils/draft.ts`（localStorage 草稿）
 
 ## 六、本地开发（可选，需要本机 Node 20+）
 
@@ -99,6 +106,6 @@ sologsb-1124/
 
 ## 八、数据存储说明
 
-- **编目数据**：IndexedDB（Dexie，库名 `gbpostmark`）。表结构含版本号，`version(2)` 会把戳样与封图迁移到独立的 `assets` 表并补齐历史记录缺省字段；首次运行写入样例数据，便于直接查看各页面效果。
+- **编目数据**：IndexedDB（Dexie，库名 `gbpostmark`）。表结构含版本号：`version(2)` 把戳样与封图迁移到独立的 `assets` 表并补齐历史记录缺省字段；`version(3)` 接入贴票对账（封面增加 `reconcileStatus / reconcileSide / reconcileSnapshot`，明细增加 `toFill` 待填标记），升级时对不上的封列入待核对、缺明细的按贴票构成补待填行。首次运行写入样例数据，便于直接查看各页面效果。
 - **表单草稿**：localStorage，键名前缀 `gbpostmark:draft:`（邮戳、实寄封、邮路各一份），刷新或误关页面后可恢复，可一键清除。
 - **无后端**：不请求任何外部接口，容器无状态，不使用数据库服务与命名卷；清除浏览器站点数据即等于清空数据。
